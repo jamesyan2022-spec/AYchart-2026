@@ -131,7 +131,8 @@
     <h2 onclick="toggleCard('cardAi')"><span class="dot"></span>AI 智能生成<span class="chev">▾</span></h2>
     <div class="body">
       <label>用自然语言描述你想要的图表</label>
-      <textarea id="aiPrompt" placeholder="例：把这些数据做成桑基图，展示各原油来源到炼厂的流向，单位用万吨"></textarea>
+      <textarea id="aiPrompt" placeholder="例：尿素需求量用带标记折线放副轴，其余用堆积柱状图放主轴；显示数据标签，标题字号18"></textarea>
+      <div class="hint">支持组合图与精细控制，例如：「A、B 堆积柱，C 折线放副轴」「全部显示数据标签，字号12」「横轴标题=年份，纵轴=万吨」「图例放底部」「折线带圆形标记」。先生成预览确认，再「插入可编辑图表」。</div>
       <div class="btn-row">
         <button class="btn-red" onclick="aiGenerateChart()">AI 生成图表</button>
         <button class="btn-ghost" onclick="aiRecommend()">推荐图表</button>
@@ -525,8 +526,11 @@ async function aiGenerateChart(){
       "3)配色优先使用 ['#003880','#C02828','#0E76BC','#F2A900','#5A8F29','#7D3C98']；"+
       '4)包含合理的 title.text、tooltip、必要时 legend，以及正确的 series；5)所有标签使用中文；'+
       '6)每个 series 的 name 必须与其对应的数据系列名称（表头或首列标签）完全一致，便于映射到 Excel；'+
-      '7)若需求涉及双轴/副轴，请把 yAxis 写成含两个对象的数组，并对放副轴的系列设置 yAxisIndex:1；'+
-      '8)若需求要求不同系列用不同图表类型（如某系列折线、其余柱状），逐 series 设置 type，并保留 stack（堆积时同一 stack 值）等属性，带标记折线请设 symbol 与 showSymbol:true。';
+      '7)双轴/副轴：把 yAxis 写成含两个对象的数组，并对放副轴的系列设置 yAxisIndex:1；轴名写在对应 yAxis[i].name / xAxis.name；'+
+      '8)组合图：逐 series 设置 type（bar/line/area 用 line+areaStyle/scatter），堆积用相同的 stack 值；带标记折线设 symbol:"circle" 且 showSymbol:true；'+
+      '9)数据标签：如需显示数值，给相应 series 设 label:{show:true}，字号写 label.fontSize、颜色写 label.color；'+
+      '10)字体字号：标题字号写 title.textStyle.fontSize，坐标轴刻度字号写 xAxis.axisLabel.fontSize / yAxis.axisLabel.fontSize，图例字号写 legend.textStyle.fontSize；'+
+      '11)如用户未指定的细节，使用专业且清晰的默认值。';
     var user = '表头(JSON)：'+JSON.stringify(sd.headers)+'\n数据行(JSON二维数组，最多200行)：'+
       JSON.stringify(sd.rows.slice(0,200))+'\n可视化需求：'+prompt;
     var content = await callDeepSeek([{role:'system',content:sys},{role:'user',content:user}], {json:true});
@@ -661,9 +665,110 @@ function decideSeriesBy(opt){
   return null;
 }
 
+// 系列名归一化（去空格、去括号单位），提高与 Excel 系列名的匹配率
+function normName(s){
+  return String(s==null?'':s).replace(/\s+/g,'').replace(/[（(][^）)]*[）)]/g,'');
+}
 function matchSeries(esSeries, name, idx){
-  for(var i=0;i<esSeries.length;i++){ if(String(esSeries[i].name)===String(name)) return esSeries[i]; }
+  var n=String(name);
+  for(var i=0;i<esSeries.length;i++){ if(String(esSeries[i].name)===n) return esSeries[i]; }
+  var nn=normName(name);
+  for(var j=0;j<esSeries.length;j++){ if(normName(esSeries[j].name)===nn) return esSeries[j]; }
   return esSeries[idx]||null;
+}
+function firstAxis(a){ return a?(Array.isArray(a)?a[0]:a):null; }
+function secondAxis(a){ return (Array.isArray(a)&&a[1])?a[1]:null; }
+function legendPosOf(lg){
+  if(!lg) return 'Top';
+  if(lg.bottom!=null || lg.top==='bottom' || lg.orient==='horizontal'&&lg.bottom!=null) return 'Bottom';
+  if(lg.left!=null && lg.left!=='center' && lg.left!=='auto') return 'Left';
+  if(lg.right!=null && lg.right!=='center' && lg.right!=='auto') return 'Right';
+  if(lg.top==='bottom') return 'Bottom';
+  return 'Top';
+}
+
+// 将 ECharts 配置完整翻译为 Excel 原生图表的设置（标题/图例/轴/逐系列类型/副轴/标记/数据标签/颜色/字号）
+async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
+  opt = opt || {};
+  // 标题
+  try{
+    var ti=opt.title||{}; var ts=ti.textStyle||{};
+    ch.title.text = ti.text || lastTitle || '图表';
+    ch.title.visible = ti.show===false ? false : true;
+    if(ts.fontSize){ ch.title.format.font.size = ts.fontSize; }
+    if(ts.color){ ch.title.format.font.color = ts.color; }
+    if(ts.fontWeight==='bold' || Number(ts.fontWeight)>=600){ ch.title.format.font.bold = true; }
+  }catch(e){ warn.push('标题'); }
+  // 图例
+  try{
+    if(opt.legend && opt.legend.show===false){ ch.legend.visible=false; }
+    else if(opt.legend){ ch.legend.visible=true; ch.legend.position = legendPosOf(opt.legend);
+      var lts=opt.legend.textStyle||{}; if(lts.fontSize){ ch.legend.format.font.size=lts.fontSize; } }
+  }catch(e){ warn.push('图例'); }
+  // 横轴（类别轴）
+  try{
+    var xa=firstAxis(opt.xAxis), ca=ch.axes.categoryAxis;
+    if(xa){
+      if(xa.name){ ca.title.text=xa.name; ca.title.visible=true; }
+      var xl=xa.axisLabel||{}; if(xl.fontSize){ ca.format.font.size=xl.fontSize; } if(xl.color){ ca.format.font.color=xl.color; }
+    }
+  }catch(e){ warn.push('横轴'); }
+  // 主值轴
+  try{
+    var ya=firstAxis(opt.yAxis), va=ch.axes.valueAxis;
+    if(ya){
+      if(ya.name){ va.title.text=ya.name; va.title.visible=true; }
+      var yl=ya.axisLabel||{}; if(yl.fontSize){ va.format.font.size=yl.fontSize; }
+      if(ya.min!=null){ va.minimum=ya.min; } if(ya.max!=null){ va.maximum=ya.max; }
+    }
+  }catch(e){ warn.push('主轴'); }
+
+  // 逐系列处理（组合图 & 单类型图都走这里，保证颜色/标签/标记一致）
+  ch.series.load('items/name');
+  await ctx.sync();
+  var es=opt.series||[]; var items=ch.series.items||[]; var secUsed=false;
+  for(var k=0;k<items.length;k++){
+    var exS=items[k]; var s=matchSeries(es, exS.name, k); if(!s) continue;
+    // 类型（仅在组合图时改写折线/散点；柱系列沿用基础类型）
+    if(useCombo && (s.type==='line' || s.type==='scatter')){
+      try{ exS.chartType = seriesExcelType(s, opt); }catch(e){ warn.push('系列类型'); }
+    }
+    // 颜色
+    try{
+      var col=(s.itemStyle&&s.itemStyle.color)||(s.lineStyle&&s.lineStyle.color)||(opt.color&&opt.color[k%opt.color.length])||PALETTE[k%PALETTE.length];
+      if(typeof col==='string'){ if(s.type==='line'){ try{exS.format.line.color=col;}catch(_){}} else { exS.format.fill.setSolidColor(col); } }
+    }catch(e){}
+    // 折线标记
+    if(s.type==='line'){
+      try{
+        var hasM=(s.symbol&&s.symbol!=='none')||s.showSymbol===true;
+        if(hasM){ exS.markerStyle='Circle'; var sz=Array.isArray(s.symbolSize)?s.symbolSize[0]:s.symbolSize; if(sz){ exS.markerSize=Math.max(2,Math.min(72,Math.round(Number(sz)/1.4))); } }
+        else if(s.symbol==='none'||s.showSymbol===false){ exS.markerStyle='None'; }
+      }catch(e){}
+    }
+    // 数据标签
+    try{
+      if(s.label && s.label.show){
+        try{ exS.hasDataLabels=true; }catch(_){ try{ exS.dataLabels.showValue=true; }catch(__){} }
+        try{ if(s.label.fontSize){ exS.dataLabels.format.font.size=s.label.fontSize; } }catch(_){}
+        try{ if(s.label.color){ exS.dataLabels.format.font.color=s.label.color; } }catch(_){}
+      }
+    }catch(e){ warn.push('数据标签'); }
+    // 副坐标轴
+    if(s.yAxisIndex===1 || s.xAxisIndex===1){
+      try{ exS.axisGroup = (Excel.ChartAxisGroup&&Excel.ChartAxisGroup.secondary)||'Secondary'; secUsed=true; }catch(e){ warn.push('副轴'); }
+    }
+  }
+  await ctx.sync();
+  // 副值轴标题（需在系列已置于副轴之后）
+  try{
+    var ya2=secondAxis(opt.yAxis);
+    if(secUsed && ya2 && ya2.name){
+      var sec=ch.axes.getItem(Excel.ChartAxisType.value, Excel.ChartAxisGroup.secondary);
+      sec.title.text=ya2.name; sec.title.visible=true; await ctx.sync();
+    }
+  }catch(e){}
+  return secUsed;
 }
 
 async function insertNativeChart(){
@@ -679,57 +784,26 @@ async function insertNativeChart(){
   var COMBO=['bar','line','scatter'];
   var useCombo = COMBO.indexOf(key)>=0 && lastOption && lastOption.series && lastOption.series.length;
   var baseType = useCombo ? pickBaseType(lastOption) : resolveNativeType();
-  // 系列方向
   var sb = Excel.ChartSeriesBy.auto;
   if(useCombo){
     var d=decideSeriesBy(lastOption);
-    if(d==='Rows') sb=Excel.ChartSeriesBy.rows;
-    else if(d==='Columns') sb=Excel.ChartSeriesBy.columns;
+    if(d==='Rows') sb=Excel.ChartSeriesBy.rows; else if(d==='Columns') sb=Excel.ChartSeriesBy.columns;
   }
   setStatus('chartStatus','info','<span class="spin"></span>正在插入原生可编辑图表…');
   try{
+    var warn=[]; var hadSec=false;
     await Excel.run(async function(ctx){
       var sheet = ctx.workbook.worksheets.getActiveWorksheet();
       var local = selAddress.indexOf('!')>=0 ? selAddress.split('!').pop() : selAddress;
       var range = sheet.getRange(local);
       var ch = sheet.charts.add(baseType, range, sb);
-      ch.title.text = lastTitle || '图表';
       ch.name = 'LZ_Chart_'+Date.now();
-
-      if(useCombo){
-        var es = lastOption.series;
-        ch.series.load('items/name');
-        await ctx.sync();
-        var secCount=0;
-        ch.series.items.forEach(function(exS, idx){
-          var s = matchSeries(es, exS.name, idx);
-          if(!s) return;
-          // 逐系列类型（柱系列保持基础类型，仅折线/散点需要改写）
-          if(s.type==='line' || s.type==='scatter'){
-            try{ exS.chartType = seriesExcelType(s, lastOption); }catch(_){}
-          } else {
-            try{ exS.format.fill.setSolidColor(PALETTE[idx%PALETTE.length]); }catch(_){}
-          }
-          // 副坐标轴
-          if(s.yAxisIndex===1 || s.xAxisIndex===1){
-            try{ exS.axisGroup = Excel.ChartAxisGroup.secondary; secCount++; }catch(_){}
-          }
-        });
-        await ctx.sync();
-        setStatus('chartStatus','ok','已插入原生组合图'+(secCount?'（含副坐标轴）':'')+'，可在 Excel 中继续编辑。');
-      } else {
-        await ctx.sync();
-        try{
-          ch.series.load('count');
-          await ctx.sync();
-          for(var i=0;i<ch.series.items.length;i++){
-            ch.series.items[i].format.fill.setSolidColor(PALETTE[i%PALETTE.length]);
-          }
-          await ctx.sync();
-        }catch(_){}
-        setStatus('chartStatus','ok','已插入原生图表，可在 Excel 中直接编辑数据/颜色/样式。');
-      }
+      await ctx.sync();                                   // 先提交创建，确保系列集合就绪
+      hadSec = await applyEChartsToChart(ctx, ch, lastOption, useCombo, warn);
     });
+    var msg='已插入原生'+(useCombo?'组合图':'图表')+(hadSec?'（含副坐标轴）':'')+'，可在 Excel 中继续编辑。';
+    if(warn.length){ msg+=' 部分细节未能套用：'+Array.from(new Set(warn)).join('、')+'。'; }
+    setStatus('chartStatus','ok',msg);
   }catch(e){
     setStatus('chartStatus','err','插入原生图表失败：'+e.message+'。可改用「插入图片」。');
   }
