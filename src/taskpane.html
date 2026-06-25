@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>隆众 ChartAI</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script src="../assets/echarts.min.js"></script>
+  <style>
+    :root{
+      --navy:#003880; --navy2:#023985; --red:#C02828; --red2:#D23023;
+      --blue:#0E76BC; --gold:#F2A900; --green:#5A8F29; --purple:#7D3C98;
+      --ink:#1c2433; --muted:#6b7280; --line:#e6e8ee; --bg:#f6f8fb; --card:#ffffff;
+    }
+    *{box-sizing:border-box;}
+    html,body{margin:0;padding:0;}
+    body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+      color:var(--ink);background:var(--bg);font-size:13px;line-height:1.5;}
+    .wrap{padding:12px 12px 28px;}
+    .brand{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+    .brand .logo{width:26px;height:26px;border-radius:6px;background:var(--navy);
+      display:flex;align-items:flex-end;justify-content:center;gap:2px;padding:5px 4px;}
+    .brand .logo i{display:block;width:4px;background:#fff;border-radius:1px;}
+    .brand .logo i:nth-child(1){height:8px;}
+    .brand .logo i:nth-child(2){height:14px;background:var(--red);}
+    .brand .logo i:nth-child(3){height:11px;}
+    .brand h1{font-size:15px;margin:0;font-weight:700;color:var(--navy);}
+    .brand small{color:var(--muted);font-size:11px;display:block;}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+      padding:11px;margin-bottom:10px;}
+    .card > h2{font-size:12px;margin:0 0 9px;color:var(--navy);font-weight:700;
+      display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}
+    .card > h2 .dot{width:6px;height:6px;border-radius:50%;background:var(--red);}
+    .card > h2 .chev{margin-left:auto;color:var(--muted);font-weight:400;transition:.2s;}
+    .card.collapsed .body{display:none;}
+    .card.collapsed h2 .chev{transform:rotate(-90deg);}
+    label{display:block;font-size:11px;color:var(--muted);margin:7px 0 3px;}
+    input[type=text],input[type=password],select,textarea{
+      width:100%;border:1px solid var(--line);border-radius:7px;padding:7px 9px;
+      font-size:12px;font-family:inherit;color:var(--ink);background:#fff;outline:none;}
+    input:focus,select:focus,textarea:focus{border-color:var(--blue);
+      box-shadow:0 0 0 2px rgba(14,118,188,.12);}
+    textarea{resize:vertical;min-height:54px;}
+    .row{display:flex;gap:7px;}
+    .row > *{flex:1;}
+    button{cursor:pointer;border:none;border-radius:7px;font-size:12px;font-weight:600;
+      padding:8px 10px;font-family:inherit;transition:.15s;}
+    .btn-primary{background:var(--navy);color:#fff;}
+    .btn-primary:hover{background:var(--navy2);}
+    .btn-red{background:var(--red);color:#fff;}
+    .btn-red:hover{background:var(--red2);}
+    .btn-ghost{background:#eef2f7;color:var(--navy);}
+    .btn-ghost:hover{background:#e1e8f1;}
+    button:disabled{opacity:.5;cursor:not-allowed;}
+    .btn-row{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap;}
+    .btn-row > button{flex:1;min-width:88px;}
+    .hint{font-size:10.5px;color:var(--muted);margin-top:5px;}
+    .chk{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink);margin-top:8px;}
+    .chk input{width:auto;}
+    .status{font-size:11px;padding:6px 9px;border-radius:6px;margin-top:8px;display:none;}
+    .status.ok{display:block;background:#eafaf0;color:#1a7f44;border:1px solid #bfe9cf;}
+    .status.err{display:block;background:#fdecec;color:#b42318;border:1px solid #f5c6c6;}
+    .status.info{display:block;background:#eef4fb;color:#0e5a9c;border:1px solid #cfe1f3;}
+    #preview{margin-top:8px;border:1px solid var(--line);border-radius:7px;overflow:auto;max-height:130px;}
+    #preview table{border-collapse:collapse;width:100%;font-size:10.5px;}
+    #preview td,#preview th{border:1px solid var(--line);padding:3px 6px;white-space:nowrap;}
+    #preview th{background:#f0f4f9;color:var(--navy);position:sticky;top:0;}
+    .gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:4px;}
+    .gallery button{background:#fff;border:1px solid var(--line);color:var(--ink);
+      font-weight:500;padding:8px 4px;font-size:11px;display:flex;flex-direction:column;
+      align-items:center;gap:4px;border-radius:8px;}
+    .gallery button:hover{border-color:var(--blue);background:#f4f9ff;}
+    .gallery button.active{border-color:var(--navy);background:#eef3fb;color:var(--navy);font-weight:700;}
+    .gallery .ic{font-size:16px;line-height:1;}
+    #chart{width:100%;height:300px;margin-top:8px;border:1px solid var(--line);
+      border-radius:8px;background:#fff;}
+    #aiOut{margin-top:9px;font-size:12px;color:var(--ink);background:#f8fafc;
+      border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:none;}
+    #aiOut ul{margin:4px 0;padding-left:18px;}
+    #aiOut li{margin:2px 0;}
+    .spin{display:inline-block;width:12px;height:12px;border:2px solid #fff;
+      border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;
+      vertical-align:-2px;margin-right:5px;}
+    @keyframes sp{to{transform:rotate(360deg);}}
+    .foot{text-align:center;color:#aab2bf;font-size:10px;margin-top:6px;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <span class="logo"><i></i><i></i><i></i></span>
+    <div>
+      <h1>AYchart</h1>
+      <small>DeepSeek 驱动 · 高级可视化插件</small>
+    </div>
+  </div>
+
+  <!-- ====== 设置 ====== -->
+  <div class="card" id="cardCfg">
+    <h2 onclick="toggleCard('cardCfg')"><span class="dot"></span>API 设置<span class="chev">▾</span></h2>
+    <div class="body">
+      <label>DeepSeek API Key</label>
+      <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off"/>
+      <label>API 地址（如需代理可修改）</label>
+      <input type="text" id="endpoint" placeholder="https://api.deepseek.com"/>
+      <label>模型</label>
+      <input type="text" id="model" placeholder="deepseek-chat"/>
+      <div class="btn-row">
+        <button class="btn-primary" onclick="saveCfg()">保存</button>
+        <button class="btn-ghost" onclick="testApi()">测试连接</button>
+      </div>
+      <div class="hint">Key 仅保存在本机浏览器（localStorage），不上传。若出现跨域(CORS)报错，请将「API 地址」改为自建代理地址。</div>
+      <div class="status" id="cfgStatus"></div>
+    </div>
+  </div>
+
+  <!-- ====== 数据 ====== -->
+  <div class="card" id="cardData">
+    <h2 onclick="toggleCard('cardData')"><span class="dot"></span>数据<span class="chev">▾</span></h2>
+    <div class="body">
+      <button class="btn-primary" style="width:100%" onclick="readSelection()">读取当前选区</button>
+      <div class="chk"><input type="checkbox" id="hasHeader" checked/><label for="hasHeader" style="margin:0;color:var(--ink)">首行为表头</label></div>
+      <div id="preview"></div>
+      <div class="status" id="dataStatus"></div>
+    </div>
+  </div>
+
+  <!-- ====== AI ====== -->
+  <div class="card" id="cardAi">
+    <h2 onclick="toggleCard('cardAi')"><span class="dot"></span>AI 智能生成<span class="chev">▾</span></h2>
+    <div class="body">
+      <label>用自然语言描述你想要的图表</label>
+      <textarea id="aiPrompt" placeholder="例：把这些数据做成桑基图，展示各原油来源到炼厂的流向，单位用万吨"></textarea>
+      <div class="btn-row">
+        <button class="btn-red" onclick="aiGenerateChart()">AI 生成图表</button>
+        <button class="btn-ghost" onclick="aiRecommend()">推荐图表</button>
+        <button class="btn-ghost" onclick="aiInsights()">数据洞察</button>
+      </div>
+      <div id="aiOut"></div>
+    </div>
+  </div>
+
+  <!-- ====== 图表模板 ====== -->
+  <div class="card" id="cardTpl">
+    <h2 onclick="toggleCard('cardTpl')"><span class="dot"></span>图表模板（ChartExpo 式）<span class="chev">▾</span></h2>
+    <div class="body">
+      <div class="gallery" id="gallery"></div>
+      <div class="hint" id="tplHint">选择图表类型后将依据所选数据自动渲染。</div>
+    </div>
+  </div>
+
+  <!-- ====== 预览 + 输出 ====== -->
+  <div class="card">
+    <h2 style="cursor:default"><span class="dot"></span>预览</h2>
+    <div id="chart"></div>
+    <div class="btn-row">
+      <button class="btn-primary" onclick="insertNativeChart()">插入可编辑图表</button>
+      <button class="btn-ghost" onclick="insertChart()">插入图片</button>
+      <button class="btn-ghost" onclick="downloadPng()">下载 PNG</button>
+    </div>
+    <div class="status" id="chartStatus"></div>
+  </div>
+
+  <div class="foot">隆众资讯 · LZ ChartAI v1.0</div>
+</div>
+
+<script>
+/* ===================== 全局状态 ===================== */
+var PALETTE = ['#003880','#C02828','#0E76BC','#F2A900','#5A8F29','#7D3C98','#00897B','#E8743B'];
+var cfg = { key:'', endpoint:'https://api.deepseek.com', model:'deepseek-chat' };
+var currentData = null;      // 二维数组（含可能的表头）
+var chart = null;            // echarts 实例
+var officeReady = false;
+var lastSeriesType = null;   // 当前图表的类型（用于原生图表映射）
+var lastTitle = '图表';      // 当前图表标题
+var selAddress = '';         // 上次读取的选区地址
+
+// 我方图表类型 → Excel 原生 ChartType（无映射者 Excel 无原生可编辑图表）
+var NATIVE_MAP = {
+  bar:'ColumnClustered', line:'Line', pie:'Pie', funnel:'Funnel',
+  radar:'Radar', scatter:'XYScatter', bubble:'Bubble',
+  sunburst:'Sunburst', treemap:'Treemap', waterfall:'Waterfall'
+};
+// ECharts series.type → 我方类型（AI 生成图表时用）
+var ECHARTS_TO_ID = {
+  bar:'bar', line:'line', pie:'pie', funnel:'funnel', radar:'radar',
+  scatter:'scatter', sunburst:'sunburst', treemap:'treemap'
+};
+
+var CHART_TYPES = [
+  {id:'bar',     name:'柱状图', ic:'▥', hint:'第一列=类别，其余各列=数值系列'},
+  {id:'line',    name:'折线图', ic:'📈', hint:'第一列=类别，其余各列=数值系列'},
+  {id:'pie',     name:'饼图',   ic:'◔', hint:'第一列=类别，第二列=数值'},
+  {id:'funnel',  name:'漏斗图', ic:'▽', hint:'第一列=阶段，第二列=数值'},
+  {id:'radar',   name:'雷达图', ic:'◈', hint:'第一列=维度，其余各列=系列'},
+  {id:'gauge',   name:'仪表盘', ic:'◑', hint:'取所选区域第一个数值（0-100 占比类最佳）'},
+  {id:'scatter', name:'散点/气泡',ic:'⁘', hint:'列1=X，列2=Y，列3=气泡大小(可选)'},
+  {id:'sankey',  name:'桑基图', ic:'⇄', hint:'三列：[源, 目标, 数值]'},
+  {id:'sunburst',name:'旭日图', ic:'☀', hint:'[层级1, 层级2, …, 数值]，末列为数值'},
+  {id:'treemap', name:'矩形树图',ic:'▦', hint:'[层级1, 层级2, …, 数值]，末列为数值'},
+  {id:'heatmap', name:'热力图', ic:'▩', hint:'三列：[X类别, Y类别, 数值]'},
+  {id:'waterfall',name:'瀑布图',ic:'⊞', hint:'第一列=类别，第二列=数值(可正可负)'}
+];
+var activeType = null;
+
+/* ===================== 初始化 ===================== */
+Office.onReady(function(info){
+  officeReady = (info.host === Office.HostType.Excel);
+  initGallery();
+  loadCfg();
+  chart = echarts.init(document.getElementById('chart'));
+  showEmptyChart();
+  window.addEventListener('resize', function(){ if(chart) chart.resize(); });
+});
+
+function initGallery(){
+  var g = document.getElementById('gallery');
+  CHART_TYPES.forEach(function(t){
+    var b = document.createElement('button');
+    b.innerHTML = '<span class="ic">'+t.ic+'</span>'+t.name;
+    b.onclick = function(){ selectType(t.id); };
+    b.id = 'tpl_'+t.id;
+    g.appendChild(b);
+  });
+}
+
+function toggleCard(id){ document.getElementById(id).classList.toggle('collapsed'); }
+
+/* ===================== 配置持久化 ===================== */
+function loadCfg(){
+  try{
+    cfg.key = localStorage.getItem('lz_key') || '';
+    cfg.endpoint = localStorage.getItem('lz_endpoint') || 'https://api.deepseek.com';
+    cfg.model = localStorage.getItem('lz_model') || 'deepseek-chat';
+  }catch(e){}
+  document.getElementById('apiKey').value = cfg.key;
+  document.getElementById('endpoint').value = cfg.endpoint;
+  document.getElementById('model').value = cfg.model;
+  // 已配置过 Key，则默认折叠 API 设置，保持界面清爽
+  if(cfg.key){ document.getElementById('cardCfg').classList.add('collapsed'); }
+}
+function saveCfg(){
+  cfg.key = document.getElementById('apiKey').value.trim();
+  cfg.endpoint = (document.getElementById('endpoint').value.trim() || 'https://api.deepseek.com').replace(/\/+$/,'');
+  cfg.model = document.getElementById('model').value.trim() || 'deepseek-chat';
+  try{
+    localStorage.setItem('lz_key', cfg.key);
+    localStorage.setItem('lz_endpoint', cfg.endpoint);
+    localStorage.setItem('lz_model', cfg.model);
+  }catch(e){}
+  setStatus('cfgStatus','ok','已保存设置。');
+  if(cfg.key){ document.getElementById('cardCfg').classList.add('collapsed'); }
+}
+
+/* ===================== DeepSeek 调用 ===================== */
+async function callDeepSeek(messages, opts){
+  opts = opts || {};
+  if(!cfg.key){ throw new Error('请先在「API 设置」中填入 DeepSeek API Key 并保存。'); }
+  var url = cfg.endpoint.replace(/\/+$/,'') + '/chat/completions';
+  var body = { model: cfg.model, messages: messages, temperature: opts.temperature!=null?opts.temperature:0.3, stream:false };
+  if(opts.json) body.response_format = { type:'json_object' };
+  var res = await fetch(url, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+cfg.key },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    var txt = await res.text().catch(function(){return '';});
+    throw new Error('接口错误 '+res.status+'：'+txt.slice(0,300));
+  }
+  var data = await res.json();
+  return data.choices[0].message.content;
+}
+
+async function testApi(){
+  saveCfg();
+  setStatus('cfgStatus','info','<span class="spin"></span>正在测试连接…');
+  try{
+    var r = await callDeepSeek([{role:'user',content:'仅回复两个字：正常'}], {temperature:0});
+    setStatus('cfgStatus','ok','连接成功 ✓ 模型回复：'+r.trim().slice(0,20));
+  }catch(e){
+    setStatus('cfgStatus','err','连接失败：'+e.message);
+  }
+}
+
+/* ===================== 读取 Excel 选区 ===================== */
+async function readSelection(){
+  if(!officeReady){ setStatus('dataStatus','err','未检测到 Excel 环境（请在 Excel 中通过插件打开本窗格）。'); return; }
+  try{
+    await Excel.run(async function(ctx){
+      var r = ctx.workbook.getSelectedRange();
+      r.load(['values','address','rowCount','columnCount']);
+      await ctx.sync();
+      currentData = r.values;
+      selAddress = r.address;
+      renderPreview(currentData);
+      setStatus('dataStatus','ok','已读取 '+r.address+'（'+r.rowCount+'×'+r.columnCount+'）。');
+    });
+  }catch(e){
+    setStatus('dataStatus','err','读取失败：'+e.message);
+  }
+}
+
+function renderPreview(data){
+  var box = document.getElementById('preview');
+  if(!data || !data.length){ box.innerHTML=''; return; }
+  var rows = data.slice(0,8);
+  var html = '<table>';
+  rows.forEach(function(row,i){
+    html += '<tr>';
+    row.forEach(function(c){
+      var tag = (i===0 && document.getElementById('hasHeader').checked) ? 'th':'td';
+      html += '<'+tag+'>'+escapeHtml(String(c))+'</'+tag+'>';
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  if(data.length>8) html += '<div style="padding:4px 6px;color:#9aa3af;font-size:10px">… 共 '+data.length+' 行</div>';
+  box.innerHTML = html;
+}
+
+/* ===================== 数据拆分工具 ===================== */
+function splitData(){
+  if(!currentData || !currentData.length) return null;
+  var data = currentData.filter(function(r){ return r.some(function(c){return c!==''&&c!==null;}); });
+  if(!data.length) return null;
+  var hasHeader = document.getElementById('hasHeader').checked;
+  var headers, rows;
+  if(hasHeader && data.length>1){ headers = data[0].map(String); rows = data.slice(1); }
+  else { headers = data[0].map(function(_,i){return '列'+(i+1);}); rows = data; }
+  return { headers: headers, rows: rows };
+}
+function isNum(v){ return typeof v==='number' || (v!==''&&v!==null&&!isNaN(Number(v))); }
+function num(v){ var n=Number(v); return isNaN(n)?0:n; }
+
+/* ===================== 模板图表 ===================== */
+function selectType(id){
+  activeType = id;
+  lastSeriesType = id;
+  CHART_TYPES.forEach(function(t){ document.getElementById('tpl_'+t.id).classList.toggle('active', t.id===id); });
+  var t = CHART_TYPES.find(function(x){return x.id===id;});
+  document.getElementById('tplHint').textContent = '数据格式：'+t.hint;
+  var sd = splitData();
+  if(!sd){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
+  try{
+    var opt = buildOption(id, sd);
+    renderChart(opt);
+    setStatus('chartStatus','ok','已生成「'+t.name+'」。');
+  }catch(e){
+    setStatus('chartStatus','err','生成失败：'+e.message+'（请检查数据格式是否符合提示）');
+  }
+}
+
+function baseOpt(title){
+  return {
+    color: PALETTE,
+    title:{ text:title, left:'center', textStyle:{fontSize:14,color:'#1c2433',fontWeight:700} },
+    tooltip:{ trigger:'item' },
+    grid:{ left:'8%', right:'5%', bottom:'10%', top: title?'18%':'10%', containLabel:true }
+  };
+}
+
+function buildOption(type, sd){
+  var headers = sd.headers, rows = sd.rows;
+  var cats = rows.map(function(r){ return String(r[0]); });
+  var valCols = headers.slice(1);
+
+  if(type==='bar' || type==='line'){
+    var series = valCols.map(function(h,ci){
+      return { name:h, type:type, smooth:type==='line',
+        data:rows.map(function(r){ return num(r[ci+1]); }) };
+    });
+    var o = baseOpt(headers.length>2?'分组'+(type==='bar'?'柱状图':'折线图'):(type==='bar'?'柱状图':'折线图'));
+    o.tooltip={trigger:'axis'}; o.legend={top:'bottom'};
+    o.xAxis={type:'category',data:cats,axisLabel:{interval:0,rotate:cats.length>6?30:0}};
+    o.yAxis={type:'value'}; o.series=series;
+    return o;
+  }
+  if(type==='pie'){
+    var o2 = baseOpt('占比分析');
+    o2.series=[{type:'pie',radius:['38%','66%'],center:['50%','55%'],
+      data:rows.map(function(r){return {name:String(r[0]),value:num(r[1])};}),
+      label:{formatter:'{b}: {d}%'}}];
+    return o2;
+  }
+  if(type==='funnel'){
+    var o3 = baseOpt('漏斗分析');
+    o3.series=[{type:'funnel',left:'10%',width:'80%',top:'18%',bottom:'6%',
+      label:{formatter:'{b}: {c}'},
+      data:rows.map(function(r){return {name:String(r[0]),value:num(r[1])};})}];
+    return o3;
+  }
+  if(type==='radar'){
+    var maxV = Math.max.apply(null, rows.map(function(r){
+      return Math.max.apply(null, valCols.map(function(_,ci){return num(r[ci+1]);})); }));
+    var indicator = rows.map(function(r){ return {name:String(r[0]), max:Math.ceil(maxV*1.1)}; });
+    var o4 = baseOpt('雷达对比');
+    o4.tooltip={trigger:'item'}; o4.legend={top:'bottom'};
+    o4.radar={indicator:indicator, radius:'62%'};
+    o4.series=[{type:'radar',data:valCols.map(function(h,ci){
+      return {name:h, value:rows.map(function(r){return num(r[ci+1]);})};
+    })}];
+    return o4;
+  }
+  if(type==='gauge'){
+    var v=0;
+    outer: for(var i=0;i<rows.length;i++){ for(var j=0;j<rows[i].length;j++){ if(isNum(rows[i][j])){ v=num(rows[i][j]); break outer; } } }
+    var o5 = baseOpt('');
+    o5.series=[{type:'gauge',min:0,max: v<=100?100:Math.ceil(v*1.2),
+      progress:{show:true,width:14},axisLine:{lineStyle:{width:14}},
+      detail:{valueAnimation:true,fontSize:22,color:'#003880'},
+      data:[{value:v, name: headers[0]||'指标'}]}];
+    return o5;
+  }
+  if(type==='scatter'){
+    var hasSize = headers.length>=3;
+    var o6 = baseOpt('散点 / 气泡');
+    o6.tooltip={trigger:'item'};
+    o6.xAxis={type:'value',name:headers[0]}; o6.yAxis={type:'value',name:headers[1]};
+    o6.series=[{type:'scatter',
+      symbolSize: hasSize ? function(d){ return Math.max(6, Math.sqrt(d[2])*1.2); } : 12,
+      data:rows.map(function(r){ return hasSize?[num(r[0]),num(r[1]),num(r[2])]:[num(r[0]),num(r[1])]; })}];
+    return o6;
+  }
+  if(type==='sankey'){
+    var nodesSet={}; rows.forEach(function(r){ nodesSet[String(r[0])]=1; nodesSet[String(r[1])]=1; });
+    var nodes=Object.keys(nodesSet).map(function(n){return {name:n};});
+    var links=rows.map(function(r){ return {source:String(r[0]),target:String(r[1]),value:num(r[2])}; });
+    var o7 = baseOpt('流向分析（桑基图）');
+    o7.tooltip={trigger:'item',triggerOn:'mousemove'};
+    o7.series=[{type:'sankey',data:nodes,links:links,emphasis:{focus:'adjacency'},
+      lineStyle:{color:'gradient',curveness:0.5},label:{fontSize:11}}];
+    return o7;
+  }
+  if(type==='sunburst' || type==='treemap'){
+    var tree = buildTree(rows);
+    var o8 = baseOpt(type==='sunburst'?'层级占比（旭日图）':'层级占比（矩形树图）');
+    if(type==='sunburst'){
+      o8.series=[{type:'sunburst',data:tree,radius:[0,'90%'],
+        label:{minAngle:8},emphasis:{focus:'ancestor'}}];
+    }else{
+      o8.series=[{type:'treemap',data:tree,roam:false,
+        label:{show:true},upperLabel:{show:true,height:18},
+        levels:[{itemStyle:{borderColor:'#fff',borderWidth:2,gapWidth:2}},
+                {itemStyle:{borderColor:'#fff',borderWidth:1,gapWidth:1}}]}];
+    }
+    return o8;
+  }
+  if(type==='heatmap'){
+    var xs=[],ys=[];
+    rows.forEach(function(r){ var x=String(r[0]),y=String(r[1]); if(xs.indexOf(x)<0)xs.push(x); if(ys.indexOf(y)<0)ys.push(y); });
+    var hdata=rows.map(function(r){ return [xs.indexOf(String(r[0])), ys.indexOf(String(r[1])), num(r[2])]; });
+    var maxV2=Math.max.apply(null, hdata.map(function(d){return d[2];}));
+    var o9 = baseOpt('热力图');
+    o9.tooltip={position:'top'};
+    o9.grid={left:'14%',right:'8%',bottom:'14%',top:'16%'};
+    o9.xAxis={type:'category',data:xs,splitArea:{show:true}};
+    o9.yAxis={type:'category',data:ys,splitArea:{show:true}};
+    o9.visualMap={min:0,max:maxV2,calculable:true,orient:'horizontal',left:'center',bottom:'2%',
+      inRange:{color:['#e6eef7','#0E76BC','#003880']}};
+    o9.series=[{type:'heatmap',data:hdata,label:{show:true},
+      emphasis:{itemStyle:{shadowBlur:10,shadowColor:'rgba(0,0,0,.3)'}}}];
+    return o9;
+  }
+  if(type==='waterfall'){
+    var wv=rows.map(function(r){return num(r[1]);});
+    var run=0, base=[], inc=[], dec=[];
+    wv.forEach(function(v){
+      if(v>=0){ base.push(run); inc.push(v); dec.push('-'); run+=v; }
+      else { run+=v; base.push(run); inc.push('-'); dec.push(-v); }
+    });
+    var o10 = baseOpt('瀑布图');
+    o10.tooltip={trigger:'axis'};
+    o10.xAxis={type:'category',data:cats,axisLabel:{interval:0,rotate:cats.length>6?30:0}};
+    o10.yAxis={type:'value'};
+    o10.series=[
+      {name:'base',type:'bar',stack:'all',itemStyle:{color:'transparent'},emphasis:{itemStyle:{color:'transparent'}},data:base},
+      {name:'增加',type:'bar',stack:'all',itemStyle:{color:'#5A8F29'},data:inc},
+      {name:'减少',type:'bar',stack:'all',itemStyle:{color:'#C02828'},data:dec}
+    ];
+    return o10;
+  }
+  throw new Error('未知图表类型');
+}
+
+function buildTree(rows){
+  var root={_children:{}};
+  rows.forEach(function(r){
+    var val=num(r[r.length-1]);
+    var path=r.slice(0,r.length-1).map(String).filter(function(x){return x!=='';});
+    if(!path.length) return;
+    var node=root;
+    path.forEach(function(p,i){
+      node._children=node._children||{};
+      node._children[p]=node._children[p]||{name:p};
+      node=node._children[p];
+      if(i===path.length-1){ node.value=(node.value||0)+val; }
+    });
+  });
+  function toArr(n){
+    if(!n._children) return [];
+    return Object.keys(n._children).map(function(k){
+      var c=n._children[k]; var kids=toArr(c);
+      var o={name:c.name};
+      if(kids.length) o.children=kids; else o.value=c.value||0;
+      return o;
+    });
+  }
+  return toArr(root);
+}
+
+/* ===================== AI 功能 ===================== */
+async function aiGenerateChart(){
+  var sd = splitData();
+  if(!sd){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
+  var prompt = document.getElementById('aiPrompt').value.trim();
+  if(!prompt){ aiOut('请先在上方输入框描述你想要的图表。'); return; }
+  aiOut('<span class="spin"></span>AI 正在依据数据生成图表配置…');
+  try{
+    var sys = '你是数据可视化专家。根据用户提供的表格数据与需求，只输出一个可直接用于 Apache ECharts 5 的 option 配置 JSON 对象。严格要求：'+
+      '1)只输出 JSON 本体，禁止 markdown、注释或任何解释文字；'+
+      '2)禁止使用 JavaScript 函数（例如 formatter 不能写成函数），所有取值必须 JSON 可序列化；'+
+      "3)配色优先使用 ['#003880','#C02828','#0E76BC','#F2A900','#5A8F29','#7D3C98']；"+
+      '4)包含合理的 title.text、tooltip、必要时 legend，以及正确的 series；5)所有标签使用中文。';
+    var user = '表头(JSON)：'+JSON.stringify(sd.headers)+'\n数据行(JSON二维数组，最多200行)：'+
+      JSON.stringify(sd.rows.slice(0,200))+'\n可视化需求：'+prompt;
+    var content = await callDeepSeek([{role:'system',content:sys},{role:'user',content:user}], {json:true});
+    var opt = parseJSON(content);
+    if(!opt || (!opt.series && !opt.graphic)) throw new Error('返回的配置不完整');
+    if(!opt.color) opt.color = PALETTE;
+    if(opt.series && opt.series[0] && opt.series[0].type){
+      lastSeriesType = ECHARTS_TO_ID[opt.series[0].type] || opt.series[0].type;
+    }
+    renderChart(opt);
+    aiOut('✓ 已根据需求生成图表。可继续微调描述后重新生成，或点击「插入到工作表」。');
+    setStatus('chartStatus','ok','AI 图表已生成。');
+  }catch(e){
+    aiOut('生成失败：'+e.message);
+  }
+}
+
+async function aiRecommend(){
+  var sd = splitData();
+  if(!sd){ aiOut('请先「读取当前选区」。'); return; }
+  aiOut('<span class="spin"></span>AI 正在分析数据结构并推荐图表…');
+  try{
+    var sys='你是数据可视化顾问。根据数据结构推荐最合适的1-3种图表类型，每种用一句话说明理由与适用场景。中文、简洁、用 markdown 无序列表输出，不要寒暄。';
+    var user='表头：'+JSON.stringify(sd.headers)+'\n样例数据（前8行）：'+JSON.stringify(sd.rows.slice(0,8));
+    var content = await callDeepSeek([{role:'system',content:sys},{role:'user',content:user}], {temperature:0.4});
+    aiOut(mdToHtml(content));
+  }catch(e){ aiOut('推荐失败：'+e.message); }
+}
+
+async function aiInsights(){
+  var sd = splitData();
+  if(!sd){ aiOut('请先「读取当前选区」。'); return; }
+  aiOut('<span class="spin"></span>AI 正在生成数据洞察…');
+  try{
+    var sys='你是资深数据分析师。基于给定数据，输出3-6条关键洞察：趋势、对比、占比、异常或值得关注的结论。中文、用 markdown 无序列表、每条简明扼要、必要时给出数字。不要寒暄、不要复述原始数据。';
+    var user='表头：'+JSON.stringify(sd.headers)+'\n数据（最多100行）：'+JSON.stringify(sd.rows.slice(0,100));
+    var content = await callDeepSeek([{role:'system',content:sys},{role:'user',content:user}], {temperature:0.5});
+    aiOut(mdToHtml(content));
+  }catch(e){ aiOut('分析失败：'+e.message); }
+}
+
+/* ===================== 渲染 / 插入 / 导出 ===================== */
+function renderChart(opt){
+  if(!chart) chart=echarts.init(document.getElementById('chart'));
+  if(opt && opt.title && opt.title.text) lastTitle = opt.title.text;
+  chart.clear(); chart.setOption(opt, true); chart.resize();
+}
+function showEmptyChart(){
+  renderChart({ title:{text:'读取数据后，选择模板或用 AI 生成',left:'center',top:'45%',
+    textStyle:{color:'#aab2bf',fontSize:13,fontWeight:400}} });
+}
+async function insertNativeChart(){
+  if(!officeReady){ setStatus('chartStatus','err','未检测到 Excel 环境。'); return; }
+  var key = lastSeriesType;
+  if(!key){ setStatus('chartStatus','err','请先选择图表模板或用 AI 生成。'); return; }
+  var exType = NATIVE_MAP[key];
+  if(!exType){
+    var nameMap={gauge:'仪表盘',sankey:'桑基图',heatmap:'热力图',boxplot:'箱线图'};
+    setStatus('chartStatus','err','「'+(nameMap[key]||key)+'」在 Excel 中没有原生可编辑图表，请改用「插入图片」。');
+    return;
+  }
+  if(!selAddress){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
+  setStatus('chartStatus','info','<span class="spin"></span>正在插入原生可编辑图表…');
+  try{
+    await Excel.run(async function(ctx){
+      var sheet = ctx.workbook.worksheets.getActiveWorksheet();
+      var local = selAddress.indexOf('!')>=0 ? selAddress.split('!').pop() : selAddress;
+      var range = sheet.getRange(local);
+      var ch = sheet.charts.add(exType, range, Excel.ChartSeriesBy.auto);
+      ch.title.text = lastTitle || '图表';
+      ch.name = 'LZ_Chart_'+Date.now();
+      await ctx.sync();
+      // 尽量套用品牌配色（失败不影响插入）
+      try{
+        ch.series.load('count');
+        await ctx.sync();
+        for(var i=0;i<ch.series.items.length;i++){
+          ch.series.items[i].format.fill.setSolidColor(PALETTE[i%PALETTE.length]);
+        }
+        await ctx.sync();
+      }catch(_){}
+    });
+    setStatus('chartStatus','ok','已插入原生图表，可在 Excel 中直接编辑数据/颜色/样式。');
+  }catch(e){
+    setStatus('chartStatus','err','插入原生图表失败：'+e.message+'。可改用「插入图片」。');
+  }
+}
+
+async function insertChart(){
+  if(!officeReady){ setStatus('chartStatus','err','未检测到 Excel 环境。'); return; }
+  if(!chart){ return; }
+  try{
+    var dataUrl = chart.getDataURL({type:'png',pixelRatio:2,backgroundColor:'#fff'});
+    var b64 = dataUrl.split(',')[1];
+    await Excel.run(async function(ctx){
+      var sheet = ctx.workbook.worksheets.getActiveWorksheet();
+      var img = sheet.shapes.addImage(b64);
+      img.name = 'LZ_ChartAI_'+Date.now();
+      img.left = 20; img.top = 20;
+      await ctx.sync();
+    });
+    setStatus('chartStatus','ok','已插入图片到当前工作表（可自由移动/缩放）。');
+  }catch(e){
+    setStatus('chartStatus','err','插入失败：'+e.message);
+  }
+}
+function downloadPng(){
+  if(!chart) return;
+  var url = chart.getDataURL({type:'png',pixelRatio:2,backgroundColor:'#fff'});
+  var a=document.createElement('a'); a.href=url; a.download='LZ_ChartAI.png'; a.click();
+}
+
+/* ===================== 小工具 ===================== */
+function setStatus(id,kind,msg){ var el=document.getElementById(id); el.className='status '+kind; el.innerHTML=msg; }
+function aiOut(html){ var el=document.getElementById('aiOut'); el.style.display='block'; el.innerHTML=html; }
+function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function parseJSON(text){
+  var t=text.trim().replace(/^```(json)?/i,'').replace(/```$/,'').trim();
+  return JSON.parse(t);
+}
+function mdToHtml(md){
+  var h=escapeHtml(md);
+  h=h.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+  h=h.replace(/^\s*[-*]\s+(.*)$/gm,'<li>$1</li>');
+  h=h.replace(/(<li>[\s\S]*?<\/li>)/g,'<ul>$1</ul>');
+  h=h.replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>');
+  h=h.replace(/<br>(<ul>)/g,'$1').replace(/(<\/ul>)<br>/g,'$1');
+  return h;
+}
+</script>
+</body>
+</html>
