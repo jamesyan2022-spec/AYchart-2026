@@ -83,6 +83,9 @@
       vertical-align:-2px;margin-right:5px;}
     @keyframes sp{to{transform:rotate(360deg);}}
     .foot{text-align:center;color:#aab2bf;font-size:10px;margin-top:6px;}
+    .tplrow{display:flex;align-items:center;gap:6px;padding:5px 7px;border:1px solid var(--line);border-radius:7px;margin-bottom:5px;font-size:12px;}
+    .tplrow span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .tplrow button{padding:4px 8px;font-size:11px;}
   </style>
 </head>
 <body>
@@ -152,6 +155,56 @@
     </div>
   </div>
 
+  <!-- ====== 样式与分析 ====== -->
+  <div class="card collapsed" id="cardStyle">
+    <h2 onclick="toggleCard('cardStyle')"><span class="dot"></span>样式与分析<span class="chev">▾</span></h2>
+    <div class="body">
+      <label>主题预设</label>
+      <div class="btn-row">
+        <button class="btn-ghost active" id="th_report" onclick="setTheme('report')">报告版</button>
+        <button class="btn-ghost" id="th_ppt" onclick="setTheme('ppt')">PPT版</button>
+        <button class="btn-ghost" id="th_dark" onclick="setTheme('dark')">深色版</button>
+      </div>
+      <label>趋势线</label>
+      <select id="trendSel" onchange="analysis.trend=this.value;refreshPreview()">
+        <option value="none">无</option>
+        <option value="linear">线性趋势线</option>
+        <option value="ma">移动平均(3期)</option>
+      </select>
+      <label>参考线（水平目标值）</label>
+      <div class="row">
+        <input type="text" id="refVal" placeholder="如 5000" inputmode="decimal"/>
+        <button class="btn-ghost" onclick="applyRef()">应用</button>
+        <button class="btn-ghost" onclick="clearRef()">清除</button>
+      </div>
+      <div class="hint">主题/趋势线/参考线会实时反映到上方预览，并在「插入可编辑图表」时写入 Excel 原生图表。</div>
+    </div>
+  </div>
+
+  <!-- ====== 批量与模板 ====== -->
+  <div class="card collapsed" id="cardBatch">
+    <h2 onclick="toggleCard('cardBatch')"><span class="dot"></span>批量出图与模板<span class="chev">▾</span></h2>
+    <div class="body">
+      <label>批量出图（每个系列单独成图）</label>
+      <div class="row">
+        <select id="batchType">
+          <option value="line">折线图</option>
+          <option value="bar">柱状图</option>
+          <option value="area">面积图</option>
+        </select>
+        <button class="btn-primary" onclick="batchInsert()">批量生成并插入</button>
+      </div>
+      <div class="status" id="batchStatus"></div>
+      <label style="margin-top:10px">样式模板（保存当前图的样式，套用到新数据）</label>
+      <div class="row">
+        <input type="text" id="tplName" placeholder="模板名称，如：双轴组合标准"/>
+        <button class="btn-ghost" onclick="saveTemplate()">保存当前</button>
+      </div>
+      <div id="tplList" style="margin-top:8px"></div>
+      <div class="status" id="tplStatus"></div>
+    </div>
+  </div>
+
   <!-- ====== 预览 + 输出 ====== -->
   <div class="card">
     <h2 style="cursor:default"><span class="dot"></span>预览</h2>
@@ -213,6 +266,7 @@ Office.onReady(function(info){
   officeReady = (info.host === Office.HostType.Excel);
   initGallery();
   loadCfg();
+  renderTemplateList();
   chart = echarts.init(document.getElementById('chart'));
   showEmptyChart();
   window.addEventListener('resize', function(){ if(chart) chart.resize(); });
@@ -620,11 +674,184 @@ async function aiInsights(){
 }
 
 /* ===================== 渲染 / 插入 / 导出 ===================== */
+/* ===================== 主题 / 分析 / 模板 / 批量 ===================== */
+var THEMES = {
+  report:{name:'报告版', bg:'#ffffff', palette:PALETTE.slice(), titleSize:15, titleColor:'#003880', axisSize:11, axisColor:'#33415c', legendBottom:true, labelSize:11},
+  ppt:{name:'PPT版', bg:'#ffffff', palette:PALETTE.slice(), titleSize:20, titleColor:'#003880', titleBold:true, axisSize:14, axisColor:'#1c2433', legendBottom:true, labelSize:13},
+  dark:{name:'深色版', bg:'#0e1726', palette:['#4F9DF7','#FF6B6B','#34C3FF','#FFC857','#7BD389','#C792EA','#4DD0E1','#FF9E64'], titleSize:16, titleColor:'#e6edf6', axisSize:12, axisColor:'#aab6c6', legendBottom:true, labelSize:12}
+};
+var currentThemeKey='report';
+var analysis={ trend:'none', refEnabled:false, refValue:null, refLabel:'参考线' };
+
+function applyTheme(opt, key){
+  var t=THEMES[key]; if(!t||!opt) return;
+  if(!opt.color || !opt.color.length) opt.color=t.palette.slice();
+  if(opt.backgroundColor==null) opt.backgroundColor=t.bg;
+  opt.title=opt.title||{}; opt.title.textStyle=opt.title.textStyle||{};
+  var ts=opt.title.textStyle;
+  if(ts.fontSize==null) ts.fontSize=t.titleSize;
+  if(ts.color==null) ts.color=t.titleColor;
+  if(t.titleBold && ts.fontWeight==null) ts.fontWeight='bold';
+  if(opt.legend){ if(opt.legend.top==null&&opt.legend.bottom==null&&opt.legend.left==null&&opt.legend.right==null&&t.legendBottom){ opt.legend.bottom=0; }
+    opt.legend.textStyle=opt.legend.textStyle||{}; if(opt.legend.textStyle.color==null) opt.legend.textStyle.color=t.axisColor; }
+  function styleAxis(ax){ if(!ax) return; (Array.isArray(ax)?ax:[ax]).forEach(function(a){ a.axisLabel=a.axisLabel||{};
+    if(a.axisLabel.fontSize==null)a.axisLabel.fontSize=t.axisSize; if(a.axisLabel.color==null)a.axisLabel.color=t.axisColor;
+    if(a.nameTextStyle==null)a.nameTextStyle={color:t.axisColor}; }); }
+  styleAxis(opt.xAxis); styleAxis(opt.yAxis);
+  (opt.series||[]).forEach(function(s){ if(s.label&&s.label.show){ if(s.label.fontSize==null)s.label.fontSize=t.labelSize; if(s.label.color==null)s.label.color=t.axisColor; } });
+}
+function setTheme(key){
+  currentThemeKey=key;
+  ['report','ppt','dark'].forEach(function(k){ var b=document.getElementById('th_'+k); if(b) b.classList.toggle('active', k===key); });
+  refreshPreview();
+}
+
+// 参考线：以「常量折线系列」表示，预览与原生统一
+function ensureRefSeries(opt){
+  if(!opt||!opt.series||!opt.series.length) return;
+  opt.series=opt.series.filter(function(s){ return s.name!==analysis.refLabel; });
+  if(!analysis.refEnabled || analysis.refValue==null) return;
+  var fx=firstAxis(opt.xAxis); var n=(fx&&fx.data&&fx.data.length)||(Array.isArray(opt.series[0].data)?opt.series[0].data.length:0);
+  if(!n) return;
+  var data=[]; for(var i=0;i<n;i++) data.push(analysis.refValue);
+  opt.series.push({name:analysis.refLabel, type:'line', data:data, symbol:'none', smooth:false,
+    lineStyle:{type:'dashed',width:2,color:'#C02828'}, itemStyle:{color:'#C02828'}, tooltip:{show:false}});
+}
+// 趋势线：预览用计算回归线（display-only），原生用 Excel 趋势线对象
+function linReg(ys){ var n=ys.length; if(n<2) return null; var sx=0,sy=0,sxx=0,sxy=0; for(var i=0;i<n;i++){sx+=i;sy+=ys[i];sxx+=i*i;sxy+=i*ys[i];}
+  var den=(n*sxx-sx*sx); if(!den) return null; var b=(n*sxy-sx*sy)/den, a=(sy-b*sx)/n; return ys.map(function(_,i){return +(a+b*i).toFixed(4);}); }
+function movingAvg(ys,w){ return ys.map(function(_,i){ var s=0,c=0; for(var j=Math.max(0,i-w+1);j<=i;j++){s+=ys[j];c++;} return +(s/c).toFixed(4); }); }
+function addTrendPreview(opt){
+  if(analysis.trend==='none'||!opt.series) return;
+  var add=[];
+  opt.series.forEach(function(s){
+    if((s.type==='bar'||s.type==='line') && Array.isArray(s.data) && s.name!==analysis.refLabel){
+      var ys=s.data.map(function(v){return Number(typeof v==='object'?v.value:v);});
+      var tl=analysis.trend==='ma'?movingAvg(ys,3):linReg(ys);
+      if(tl) add.push({name:(s.name||'')+' 趋势', type:'line', data:tl, smooth:analysis.trend==='ma', symbol:'none',
+        lineStyle:{type:'dashed',width:1.5}, yAxisIndex:s.yAxisIndex||0, tooltip:{show:false}, silent:true});
+    }
+  });
+  opt.series=opt.series.concat(add);
+}
+
+function refreshPreview(){ if(lastOption && lastOption.series && lastOption.series.length) renderChart(lastOption); }
+
 function renderChart(opt){
   if(!chart) chart=echarts.init(document.getElementById('chart'));
   if(opt && opt.title && opt.title.text) lastTitle = opt.title.text;
+  if(opt && opt.series){ applyTheme(opt, currentThemeKey); ensureRefSeries(opt); }
   lastOption = opt;
-  chart.clear(); chart.setOption(opt, true); chart.resize();
+  var display = opt;
+  if(opt && opt.series && analysis.trend!=='none'){ display=JSON.parse(JSON.stringify(opt)); addTrendPreview(display); }
+  chart.clear(); chart.setOption(display, true); chart.resize();
+}
+
+/* —— 配置模板（样式复用） —— */
+function loadTemplates(){ try{ return JSON.parse(localStorage.getItem('lz_templates')||'{}'); }catch(e){ return {}; } }
+function persistTemplates(t){ try{ localStorage.setItem('lz_templates', JSON.stringify(t)); }catch(e){} }
+function extractProfile(opt){
+  var ts=(opt.title&&opt.title.textStyle)||{};
+  var yarr=Array.isArray(opt.yAxis)?opt.yAxis:(opt.yAxis?[opt.yAxis]:[]);
+  var xa=firstAxis(opt.xAxis)||{};
+  var p={ theme:currentThemeKey, color:opt.color, backgroundColor:opt.backgroundColor,
+    title:{fontSize:ts.fontSize,color:ts.color,fontFamily:ts.fontFamily,fontWeight:ts.fontWeight},
+    legend: opt.legend?{bottom:opt.legend.bottom,top:opt.legend.top,left:opt.legend.left,right:opt.legend.right,show:opt.legend.show,textStyle:opt.legend.textStyle}:null,
+    xAxis:{name:xa.name,axisLabel:xa.axisLabel},
+    yAxis:yarr.map(function(a){return {name:a.name,axisLabel:a.axisLabel,numberFormat:a.numberFormat,min:a.min,max:a.max};}),
+    series:{} };
+  (opt.series||[]).forEach(function(s){ if(s.name===analysis.refLabel) return;
+    p.series[normName(s.name)]={type:s.type,stack:s.stack,yAxisIndex:s.yAxisIndex,area:!!s.areaStyle,symbol:s.symbol,showSymbol:s.showSymbol,label:s.label,color:(s.itemStyle&&s.itemStyle.color)||(s.lineStyle&&s.lineStyle.color)}; });
+  return p;
+}
+function applyProfile(opt,p){
+  if(!opt||!p) return;
+  if(p.color) opt.color=p.color; if(p.backgroundColor!=null) opt.backgroundColor=p.backgroundColor;
+  opt.title=opt.title||{}; opt.title.textStyle=opt.title.textStyle||{};
+  ['fontSize','color','fontFamily','fontWeight'].forEach(function(k){ if(p.title&&p.title[k]!=null) opt.title.textStyle[k]=p.title[k]; });
+  if(p.legend){ opt.legend=opt.legend||{}; ['bottom','top','left','right','show','textStyle'].forEach(function(k){ if(p.legend[k]!=null) opt.legend[k]=p.legend[k]; }); }
+  if(p.xAxis){ var xa=firstAxis(opt.xAxis); if(xa){ if(p.xAxis.name!=null)xa.name=p.xAxis.name; if(p.xAxis.axisLabel)xa.axisLabel=Object.assign({},xa.axisLabel,p.xAxis.axisLabel); } }
+  if(p.yAxis&&p.yAxis.length){ var cur=Array.isArray(opt.yAxis)?opt.yAxis:(opt.yAxis?[opt.yAxis]:[{}]);
+    while(cur.length<p.yAxis.length) cur.push({});
+    p.yAxis.forEach(function(pa,i){ cur[i]=Object.assign({},cur[i]); if(pa.name!=null)cur[i].name=pa.name; if(pa.axisLabel)cur[i].axisLabel=Object.assign({},cur[i].axisLabel,pa.axisLabel); if(pa.numberFormat!=null)cur[i].numberFormat=pa.numberFormat; if(pa.min!=null)cur[i].min=pa.min; if(pa.max!=null)cur[i].max=pa.max; });
+    opt.yAxis=cur; }
+  (opt.series||[]).forEach(function(s){ var ps=p.series&&p.series[normName(s.name)]; if(!ps)return;
+    if(ps.type)s.type=ps.type; if(ps.stack!==undefined)s.stack=ps.stack; if(ps.yAxisIndex!==undefined)s.yAxisIndex=ps.yAxisIndex;
+    if(ps.area)s.areaStyle=s.areaStyle||{}; if(ps.symbol!==undefined)s.symbol=ps.symbol; if(ps.showSymbol!==undefined)s.showSymbol=ps.showSymbol;
+    if(ps.label)s.label=Object.assign({},s.label,ps.label); if(ps.color)s.itemStyle=Object.assign({},s.itemStyle,{color:ps.color}); });
+  if(p.theme) currentThemeKey=p.theme;
+  if(opt.series&&opt.series[0]&&opt.series[0].type) lastSeriesType=ECHARTS_TO_ID[opt.series[0].type]||opt.series[0].type;
+}
+function renderTemplateList(){
+  var box=document.getElementById('tplList'); if(!box) return;
+  var t=loadTemplates(); var names=Object.keys(t);
+  if(!names.length){ box.innerHTML='<div class="hint">暂无保存的模板。</div>'; return; }
+  box.innerHTML=names.map(function(n){
+    return '<div class="tplrow"><span>'+escapeHtml(n)+'</span>'+
+      '<button class="btn-ghost" onclick="useTemplate(\''+n.replace(/'/g,"\\'")+'\')">应用</button>'+
+      '<button class="btn-ghost" onclick="delTemplate(\''+n.replace(/'/g,"\\'")+'\')">删除</button></div>';
+  }).join('');
+}
+function saveTemplate(){
+  if(!lastOption||!lastOption.series||!lastOption.series.length){ setStatus('tplStatus','err','请先生成一个图表再保存。'); return; }
+  var name=(document.getElementById('tplName').value||'').trim(); if(!name){ setStatus('tplStatus','err','请输入模板名称。'); return; }
+  var t=loadTemplates(); t[name]=extractProfile(lastOption); persistTemplates(t);
+  document.getElementById('tplName').value=''; renderTemplateList(); setStatus('tplStatus','ok','已保存模板「'+name+'」。');
+}
+function useTemplate(name){
+  if(!lastOption||!lastOption.series||!lastOption.series.length){ setStatus('tplStatus','err','请先生成当前数据的图表，再套用模板。'); return; }
+  var t=loadTemplates(); var p=t[name]; if(!p){ setStatus('tplStatus','err','模板不存在。'); return; }
+  applyProfile(lastOption, p); renderChart(lastOption);
+  setStatus('tplStatus','ok','已套用模板「'+name+'」到当前图表。');
+}
+function delTemplate(name){ var t=loadTemplates(); delete t[name]; persistTemplates(t); renderTemplateList(); setStatus('tplStatus','ok','已删除模板「'+name+'」。'); }
+
+function applyRef(){
+  var v=parseFloat(document.getElementById('refVal').value);
+  if(isNaN(v)){ setStatus('chartStatus','err','请输入有效的参考线数值。'); return; }
+  analysis.refEnabled=true; analysis.refValue=v; refreshPreview();
+  setStatus('chartStatus','ok','已添加参考线 '+v+'，插入时将写入原生图表。');
+}
+function clearRef(){ analysis.refEnabled=false; analysis.refValue=null; document.getElementById('refVal').value=''; refreshPreview(); }
+
+/* —— 批量出图：每个系列一张图 —— */
+async function batchInsert(){
+  if(!officeReady){ setStatus('batchStatus','err','未检测到 Excel 环境。'); return; }
+  var sd=splitData(); if(!sd){ setStatus('batchStatus','err','请先「读取当前选区」。'); return; }
+  var kind=document.getElementById('batchType').value||'line';
+  var typeMap={line:'Line', bar:'ColumnClustered', area:'Area'};
+  var headers=sd.headers, rows=sd.rows; var vcols=headers.slice(1);
+  if(!vcols.length){ setStatus('batchStatus','err','数据至少需要1个类别列+1个数值列。'); return; }
+  setStatus('batchStatus','info','<span class="spin"></span>正在批量生成 '+vcols.length+' 张图…');
+  try{
+    await Excel.run(async function(ctx){
+      var name='_AYchart_src';
+      var hs=ctx.workbook.worksheets.getItemOrNullObject(name); await ctx.sync();
+      if(hs.isNullObject){ hs=ctx.workbook.worksheets.add(name); }
+      var used=hs.getUsedRangeOrNullObject(); await ctx.sync(); try{ if(!used.isNullObject){ used.clear(); await ctx.sync(); } }catch(_){}
+      var active=ctx.workbook.worksheets.getActiveWorksheet();
+      var charts=[];
+      for(var i=0;i<vcols.length;i++){
+        var block=[[headers[0], headers[i+1]]];
+        for(var r=0;r<rows.length;r++){ block.push([rows[r][0], Number(rows[r][i+1])||0]); }
+        var rng=hs.getRangeByIndexes(0, i*3, block.length, 2);
+        rng.values=block;
+        var ch=active.charts.add(typeMap[kind]||'Line', rng, Excel.ChartSeriesBy.columns);
+        ch.title.text=String(headers[i+1]); ch.name='LZ_Batch_'+i+'_'+Date.now();
+        charts.push(ch);
+      }
+      await ctx.sync();
+      var perRow=2, W=300, H=200, gX=14, gY=14, x0=12, y0=12;
+      charts.forEach(function(ch,i){ var rr=Math.floor(i/perRow), cc=i%perRow;
+        try{ ch.left=x0+cc*(W+gX); ch.top=y0+rr*(H+gY); ch.width=W; ch.height=H; }catch(_){}
+        try{ ch.series.load('items'); }catch(_){} });
+      await ctx.sync();
+      charts.forEach(function(ch,i){ try{ ch.series.items[0].format.fill.setSolidColor(PALETTE[i%PALETTE.length]); }catch(_){} });
+      await ctx.sync();
+      try{ hs.visibility=Excel.SheetVisibility.hidden; await ctx.sync(); }catch(_){}
+    });
+    setStatus('batchStatus','ok','已生成 '+vcols.length+' 张图并按网格排布在当前工作表。');
+  }catch(e){ setStatus('batchStatus','err','批量生成失败：'+e.message); }
 }
 
 // 根据当前 ECharts 配置精确判断 Excel 原生图表类型（堆积/簇状/横向/面积/环形等）
@@ -737,6 +964,8 @@ function legendPosOf(lg){
 // 将 ECharts 配置完整翻译为 Excel 原生图表的设置（标题/图例/轴/逐系列类型/副轴/标记/数据标签/颜色/字号）
 async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
   opt = opt || {};
+  // 背景（主题）
+  try{ if(opt.backgroundColor){ ch.format.fill.setSolidColor(opt.backgroundColor); } }catch(e){}
   // 标题
   try{
     var ti=opt.title||{}; var ts=ti.textStyle||{};
@@ -766,7 +995,7 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
     var ya=firstAxis(opt.yAxis), va=ch.axes.valueAxis;
     if(ya){
       if(ya.name){ va.title.text=ya.name; va.title.visible=true; }
-      var yl=ya.axisLabel||{}; if(yl.fontSize){ va.format.font.size=yl.fontSize; } if(yl.fontFamily){ va.format.font.name=yl.fontFamily; }
+      var yl=ya.axisLabel||{}; if(yl.fontSize){ va.format.font.size=yl.fontSize; } if(yl.fontFamily){ va.format.font.name=yl.fontFamily; } if(yl.color){ try{ va.format.font.color=yl.color; }catch(_){} }
       if(ya.numberFormat){ try{ va.numberFormat=ya.numberFormat; }catch(_){} }
       if(ya.min!=null){ va.minimum=ya.min; } if(ya.max!=null){ va.maximum=ya.max; }
     }
@@ -832,6 +1061,17 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
     }
   }
   await ctx.sync();
+  // 趋势线（Excel 原生趋势线对象，参考线系列除外）
+  try{
+    if(analysis.trend!=='none'){
+      var tlt = analysis.trend==='ma' ? 'Movingaverage' : 'Linear';
+      for(var ti=0;ti<items.length;ti++){
+        if(String(items[ti].name)===analysis.refLabel) continue;
+        try{ var tl=items[ti].trendlines.add(tlt); if(analysis.trend==='ma'){ try{ tl.movingAveragePeriod=3; }catch(_){} } }catch(_){}
+      }
+      await ctx.sync();
+    }
+  }catch(e){ warn.push('趋势线'); }
   // 副值轴标题（需在系列已置于副轴之后）
   try{
     var ya2=secondAxis(opt.yAxis);
@@ -843,20 +1083,33 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
   return secUsed;
 }
 
-// 不连续选区：把重组后的紧凑数据写入隐藏表，供原生图表绑定
-async function buildSourceRange(ctx){
+// 不连续选区/参考线：把重组后的紧凑数据写入隐藏表，供原生图表绑定
+async function buildSourceRange(ctx, matrix){
+  matrix = matrix || currentData;
   var name='_AYchart_src';
   var hs = ctx.workbook.worksheets.getItemOrNullObject(name);
   await ctx.sync();
   if(hs.isNullObject){ hs = ctx.workbook.worksheets.add(name); }
   var used = hs.getUsedRangeOrNullObject(); await ctx.sync();
   try{ if(!used.isNullObject){ used.clear(); await ctx.sync(); } }catch(_){}
-  var rows=currentData.length, cols=(currentData[0]||[]).length;
+  var rows=matrix.length, cols=(matrix[0]||[]).length;
   var rng = hs.getRangeByIndexes(0,0,rows,cols);
-  rng.values = currentData;
+  rng.values = matrix;
   await ctx.sync();
   try{ hs.visibility = Excel.SheetVisibility.hidden; await ctx.sync(); }catch(_){}
   return rng;
+}
+// 在正确的维度上追加参考线常量（系列在行→加一行；否则加一列）
+function buildSrcMatrix(seriesBy){
+  var m = currentData.map(function(r){ return r.slice(); });
+  if(analysis.refEnabled && analysis.refValue!=null){
+    if(seriesBy==='Rows'){
+      var row=[analysis.refLabel]; for(var c=1;c<(m[0]||[]).length;c++) row.push(analysis.refValue); m.push(row);
+    }else{
+      m = m.map(function(r,i){ return r.concat([ i===0 ? analysis.refLabel : analysis.refValue ]); });
+    }
+  }
+  return m;
 }
 
 async function insertNativeChart(){
@@ -869,12 +1122,15 @@ async function insertNativeChart(){
     return;
   }
   if(!currentData || !currentData.length){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
+  if(analysis.refEnabled && analysis.refValue!=null && lastOption){ ensureRefSeries(lastOption); }
   var COMBO=['bar','line','scatter'];
   var useCombo = COMBO.indexOf(key)>=0 && lastOption && lastOption.series && lastOption.series.length;
   var baseType = useCombo ? pickBaseType(lastOption) : resolveNativeType();
+  var needSource = selMultiArea || (analysis.refEnabled && analysis.refValue!=null);
   var sb = Excel.ChartSeriesBy.auto;
-  if(useCombo && !selMultiArea){
-    var d=decideSeriesBy(lastOption);
+  var d;
+  if(useCombo){
+    d=decideSeriesBy(lastOption);
     if(d==='Rows') sb=Excel.ChartSeriesBy.rows; else if(d==='Columns') sb=Excel.ChartSeriesBy.columns;
   }
   setStatus('chartStatus','info','<span class="spin"></span>正在插入原生可编辑图表…');
@@ -883,15 +1139,15 @@ async function insertNativeChart(){
     await Excel.run(async function(ctx){
       var sheet = ctx.workbook.worksheets.getActiveWorksheet();
       var range;
-      if(selMultiArea){
-        range = await buildSourceRange(ctx);     // 不连续选区→隐藏表紧凑数据
+      if(needSource){
+        range = await buildSourceRange(ctx, buildSrcMatrix(d));   // 不连续选区/含参考线→隐藏表
       }else{
         var local = selAddress.indexOf('!')>=0 ? selAddress.split('!').pop() : selAddress;
         range = sheet.getRange(local);
       }
       var ch = sheet.charts.add(baseType, range, sb);
       ch.name = 'LZ_Chart_'+Date.now();
-      await ctx.sync();                                   // 先提交创建，确保系列集合就绪
+      await ctx.sync();
       hadSec = await applyEChartsToChart(ctx, ch, lastOption, useCombo, warn);
     });
     // 横轴类别（列）筛选检测：原生图无法只画部分类别
