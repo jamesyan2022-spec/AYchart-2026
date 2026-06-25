@@ -133,6 +133,7 @@
       <label>用自然语言描述你想要的图表</label>
       <textarea id="aiPrompt" placeholder="例：尿素需求量用带标记折线放副轴，其余用堆积柱状图放主轴；显示数据标签，标题字号18"></textarea>
       <div class="hint">支持组合图与精细控制，例如：「A、B 堆积柱，C 折线放副轴」「全部显示数据标签，字号12」「横轴标题=年份，纵轴=万吨」「图例放底部」「折线带圆形标记」。先生成预览确认，再「插入可编辑图表」。</div>
+      <div class="chk"><input type="checkbox" id="aiEdit" checked/><label for="aiEdit" style="margin:0;color:var(--ink)">基于当前图修改（取消则新建）</label></div>
       <div class="btn-row">
         <button class="btn-red" onclick="aiGenerateChart()">AI 生成图表</button>
         <button class="btn-ghost" onclick="aiRecommend()">推荐图表</button>
@@ -529,10 +530,23 @@ async function aiGenerateChart(){
       '7)双轴/副轴：把 yAxis 写成含两个对象的数组，并对放副轴的系列设置 yAxisIndex:1；轴名写在对应 yAxis[i].name / xAxis.name；'+
       '8)组合图：逐 series 设置 type（bar/line/area 用 line+areaStyle/scatter），堆积用相同的 stack 值；带标记折线设 symbol:"circle" 且 showSymbol:true；'+
       '9)数据标签：如需显示数值，给相应 series 设 label:{show:true}，字号写 label.fontSize、颜色写 label.color；'+
-      '10)字体字号：标题字号写 title.textStyle.fontSize，坐标轴刻度字号写 xAxis.axisLabel.fontSize / yAxis.axisLabel.fontSize，图例字号写 legend.textStyle.fontSize；'+
-      '11)如用户未指定的细节，使用专业且清晰的默认值。';
-    var user = '表头(JSON)：'+JSON.stringify(sd.headers)+'\n数据行(JSON二维数组，最多200行)：'+
-      JSON.stringify(sd.rows.slice(0,200))+'\n可视化需求：'+prompt;
+      '10)字体字号：标题字号写 title.textStyle.fontSize，坐标轴刻度字号写 xAxis.axisLabel.fontSize / yAxis.axisLabel.fontSize，图例字号写 legend.textStyle.fontSize；字体名写对应的 fontFamily（如 "楷体"、"微软雅黑"，数据标签写 series.label.fontFamily）；'+
+      '11)小数位/数字格式：用 Excel 数字格式字符串放在自定义字段 numberFormat 上——数据标签写 series.label.numberFormat（如 "0" 表示0位小数、"0.0"、"#,##0"），数值轴写 yAxis.numberFormat；'+
+      '12)若提供了"当前图表配置"，必须在其基础上做最小化修改、保留未提及的设置，并输出完整更新后的 option；'+
+      '13)如用户未指定的细节，使用专业且清晰的默认值。';
+    var editMode = document.getElementById('aiEdit') && document.getElementById('aiEdit').checked
+                   && lastOption && lastOption.series && lastOption.series.length;
+    var user;
+    if(editMode){
+      user = '当前图表配置(ECharts option JSON)：\n'+JSON.stringify(lastOption)+
+        '\n\n表头(JSON)：'+JSON.stringify(sd.headers)+
+        '\n数据行(JSON二维数组，最多200行)：'+JSON.stringify(sd.rows.slice(0,200))+
+        '\n\n修改需求：'+prompt+
+        '\n请在"当前图表配置"基础上做最小化修改，未提及的部分保持原样，输出完整的、更新后的 option JSON。';
+    }else{
+      user = '表头(JSON)：'+JSON.stringify(sd.headers)+'\n数据行(JSON二维数组，最多200行)：'+
+        JSON.stringify(sd.rows.slice(0,200))+'\n可视化需求：'+prompt;
+    }
     var content = await callDeepSeek([{role:'system',content:sys},{role:'user',content:user}], {json:true});
     var opt = parseJSON(content);
     if(!opt || (!opt.series && !opt.graphic)) throw new Error('返回的配置不完整');
@@ -696,6 +710,7 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
     ch.title.text = ti.text || lastTitle || '图表';
     ch.title.visible = ti.show===false ? false : true;
     if(ts.fontSize){ ch.title.format.font.size = ts.fontSize; }
+    if(ts.fontFamily){ ch.title.format.font.name = ts.fontFamily; }
     if(ts.color){ ch.title.format.font.color = ts.color; }
     if(ts.fontWeight==='bold' || Number(ts.fontWeight)>=600){ ch.title.format.font.bold = true; }
   }catch(e){ warn.push('标题'); }
@@ -703,14 +718,14 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
   try{
     if(opt.legend && opt.legend.show===false){ ch.legend.visible=false; }
     else if(opt.legend){ ch.legend.visible=true; ch.legend.position = legendPosOf(opt.legend);
-      var lts=opt.legend.textStyle||{}; if(lts.fontSize){ ch.legend.format.font.size=lts.fontSize; } }
+      var lts=opt.legend.textStyle||{}; if(lts.fontSize){ ch.legend.format.font.size=lts.fontSize; } if(lts.fontFamily){ ch.legend.format.font.name=lts.fontFamily; } }
   }catch(e){ warn.push('图例'); }
   // 横轴（类别轴）
   try{
     var xa=firstAxis(opt.xAxis), ca=ch.axes.categoryAxis;
     if(xa){
       if(xa.name){ ca.title.text=xa.name; ca.title.visible=true; }
-      var xl=xa.axisLabel||{}; if(xl.fontSize){ ca.format.font.size=xl.fontSize; } if(xl.color){ ca.format.font.color=xl.color; }
+      var xl=xa.axisLabel||{}; if(xl.fontSize){ ca.format.font.size=xl.fontSize; } if(xl.fontFamily){ ca.format.font.name=xl.fontFamily; } if(xl.color){ ca.format.font.color=xl.color; }
     }
   }catch(e){ warn.push('横轴'); }
   // 主值轴
@@ -718,7 +733,8 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
     var ya=firstAxis(opt.yAxis), va=ch.axes.valueAxis;
     if(ya){
       if(ya.name){ va.title.text=ya.name; va.title.visible=true; }
-      var yl=ya.axisLabel||{}; if(yl.fontSize){ va.format.font.size=yl.fontSize; }
+      var yl=ya.axisLabel||{}; if(yl.fontSize){ va.format.font.size=yl.fontSize; } if(yl.fontFamily){ va.format.font.name=yl.fontFamily; }
+      if(ya.numberFormat){ try{ va.numberFormat=ya.numberFormat; }catch(_){} }
       if(ya.min!=null){ va.minimum=ya.min; } if(ya.max!=null){ va.maximum=ya.max; }
     }
   }catch(e){ warn.push('主轴'); }
@@ -751,7 +767,9 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
       if(s.label && s.label.show){
         try{ exS.hasDataLabels=true; }catch(_){ try{ exS.dataLabels.showValue=true; }catch(__){} }
         try{ if(s.label.fontSize){ exS.dataLabels.format.font.size=s.label.fontSize; } }catch(_){}
+        try{ if(s.label.fontFamily){ exS.dataLabels.format.font.name=s.label.fontFamily; } }catch(_){}
         try{ if(s.label.color){ exS.dataLabels.format.font.color=s.label.color; } }catch(_){}
+        try{ if(s.label.numberFormat){ exS.dataLabels.numberFormat=s.label.numberFormat; } }catch(_){}
       }
     }catch(e){ warn.push('数据标签'); }
     // 副坐标轴
