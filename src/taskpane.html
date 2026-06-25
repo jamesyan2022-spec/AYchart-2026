@@ -174,6 +174,7 @@ var chart = null;            // echarts 实例
 var officeReady = false;
 var lastSeriesType = null;   // 当前图表的类型（用于原生图表映射）
 var lastTitle = '图表';      // 当前图表标题
+var lastOption = null;       // 当前 ECharts 配置（用于判断堆积/横向等）
 var selAddress = '';         // 上次读取的选区地址
 
 // 我方图表类型 → Excel 原生 ChartType（无映射者 Excel 无原生可编辑图表）
@@ -568,7 +569,38 @@ async function aiInsights(){
 function renderChart(opt){
   if(!chart) chart=echarts.init(document.getElementById('chart'));
   if(opt && opt.title && opt.title.text) lastTitle = opt.title.text;
+  lastOption = opt;
   chart.clear(); chart.setOption(opt, true); chart.resize();
+}
+
+// 根据当前 ECharts 配置精确判断 Excel 原生图表类型（堆积/簇状/横向/面积/环形等）
+function resolveNativeType(){
+  var key = lastSeriesType;
+  var base = NATIVE_MAP[key];
+  if(!base) return null;                 // Excel 无原生对应
+  var opt = lastOption;
+  if(!opt || !opt.series || !opt.series.length) return base;
+  var series = opt.series;
+  var first = series[0] || {};
+  var t = first.type;
+  var stacked = series.some(function(s){ return s && s.stack!=null && s.stack!==''; });
+  function axisType(ax){ if(!ax) return ''; return (Array.isArray(ax)?ax[0]:ax).type || ''; }
+  if(t==='bar'){
+    var horizontal = axisType(opt.yAxis)==='category';
+    if(horizontal) return stacked ? 'BarStacked' : 'BarClustered';
+    return stacked ? 'ColumnStacked' : 'ColumnClustered';
+  }
+  if(t==='line'){
+    var area = !!first.areaStyle;
+    if(area) return stacked ? 'AreaStacked' : 'Area';
+    return stacked ? 'LineStacked' : 'Line';
+  }
+  if(t==='pie'){
+    var r = first.radius;
+    var doughnut = Array.isArray(r) && r[0] && String(r[0])!=='0' && String(r[0])!=='0%';
+    return doughnut ? 'Doughnut' : 'Pie';
+  }
+  return base;
 }
 function showEmptyChart(){
   renderChart({ title:{text:'读取数据后，选择模板或用 AI 生成',left:'center',top:'45%',
@@ -578,7 +610,7 @@ async function insertNativeChart(){
   if(!officeReady){ setStatus('chartStatus','err','未检测到 Excel 环境。'); return; }
   var key = lastSeriesType;
   if(!key){ setStatus('chartStatus','err','请先选择图表模板或用 AI 生成。'); return; }
-  var exType = NATIVE_MAP[key];
+  var exType = resolveNativeType();
   if(!exType){
     var nameMap={gauge:'仪表盘',sankey:'桑基图',heatmap:'热力图',boxplot:'箱线图'};
     setStatus('chartStatus','err','「'+(nameMap[key]||key)+'」在 Excel 中没有原生可编辑图表，请改用「插入图片」。');
