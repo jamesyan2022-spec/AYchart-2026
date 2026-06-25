@@ -523,7 +523,10 @@ async function aiGenerateChart(){
       '1)只输出 JSON 本体，禁止 markdown、注释或任何解释文字；'+
       '2)禁止使用 JavaScript 函数（例如 formatter 不能写成函数），所有取值必须 JSON 可序列化；'+
       "3)配色优先使用 ['#003880','#C02828','#0E76BC','#F2A900','#5A8F29','#7D3C98']；"+
-      '4)包含合理的 title.text、tooltip、必要时 legend，以及正确的 series；5)所有标签使用中文。';
+      '4)包含合理的 title.text、tooltip、必要时 legend，以及正确的 series；5)所有标签使用中文；'+
+      '6)每个 series 的 name 必须与其对应的数据系列名称（表头或首列标签）完全一致，便于映射到 Excel；'+
+      '7)若需求涉及双轴/副轴，请把 yAxis 写成含两个对象的数组，并对放副轴的系列设置 yAxisIndex:1；'+
+      '8)若需求要求不同系列用不同图表类型（如某系列折线、其余柱状），逐 series 设置 type，并保留 stack（堆积时同一 stack 值）等属性，带标记折线请设 symbol 与 showSymbol:true。';
     var user = '表头(JSON)：'+JSON.stringify(sd.headers)+'\n数据行(JSON二维数组，最多200行)：'+
       JSON.stringify(sd.rows.slice(0,200))+'\n可视化需求：'+prompt;
     var content = await callDeepSeek([{role:'system',content:sys},{role:'user',content:user}], {json:true});
@@ -606,38 +609,127 @@ function showEmptyChart(){
   renderChart({ title:{text:'读取数据后，选择模板或用 AI 生成',left:'center',top:'45%',
     textStyle:{color:'#aab2bf',fontSize:13,fontWeight:400}} });
 }
+
+/* —— 组合图/双轴辅助 —— */
+function axisTypeOf(ax){ if(!ax) return ''; return (Array.isArray(ax)?ax[0]:ax).type || ''; }
+
+// 单个 ECharts series → Excel 原生类型
+function seriesExcelType(s, opt){
+  if(s.type==='line'){
+    var area=!!s.areaStyle;
+    var stk=s.stack!=null&&s.stack!=='';
+    var mk=s.symbol && s.symbol!=='none' || s.showSymbol===true;
+    if(area) return stk?'AreaStacked':'Area';
+    return mk?'LineMarkers':'Line';
+  }
+  if(s.type==='scatter') return 'XYScatter';
+  // bar
+  var stacked=s.stack!=null&&s.stack!=='';
+  var horizontal=axisTypeOf(opt.yAxis)==='category';
+  if(horizontal) return stacked?'BarStacked':'BarClustered';
+  return stacked?'ColumnStacked':'ColumnClustered';
+}
+
+// 创建图所需的基础类型（优先柱系列，保证柱组堆积/簇状正确）
+function pickBaseType(opt){
+  var s=opt.series||[];
+  var bar=s.filter(function(x){return x.type==='bar';});
+  if(bar.length){
+    var anyStack=bar.some(function(x){return x.stack!=null&&x.stack!=='';});
+    var horizontal=axisTypeOf(opt.yAxis)==='category';
+    if(horizontal) return anyStack?'BarStacked':'BarClustered';
+    return anyStack?'ColumnStacked':'ColumnClustered';
+  }
+  return s[0]?seriesExcelType(s[0],opt):'ColumnClustered';
+}
+
+// 判断 Excel 系列方向，使其与预览一致（类别在列标题→系列在行；类别在首列→系列在列）
+function decideSeriesBy(opt){
+  try{
+    if(!currentData||!currentData.length) return null;
+    var ax = opt.xAxis ? (Array.isArray(opt.xAxis)?opt.xAxis[0]:opt.xAxis) : null;
+    var cats = ax && ax.data;
+    if(!cats||!cats.length) return null;
+    var c = cats.map(String);
+    var hasHeader=document.getElementById('hasHeader').checked;
+    var headerCats=(currentData[0]||[]).slice(1).map(String);
+    var colCats=currentData.slice(hasHeader?1:0).map(function(r){return String(r[0]);});
+    var eq=function(a,b){ return a.length===b.length && a.every(function(v,i){return v===b[i];}); };
+    if(eq(c,headerCats)) return 'Rows';
+    if(eq(c,colCats)) return 'Columns';
+  }catch(_){}
+  return null;
+}
+
+function matchSeries(esSeries, name, idx){
+  for(var i=0;i<esSeries.length;i++){ if(String(esSeries[i].name)===String(name)) return esSeries[i]; }
+  return esSeries[idx]||null;
+}
+
 async function insertNativeChart(){
   if(!officeReady){ setStatus('chartStatus','err','未检测到 Excel 环境。'); return; }
   var key = lastSeriesType;
   if(!key){ setStatus('chartStatus','err','请先选择图表模板或用 AI 生成。'); return; }
-  var exType = resolveNativeType();
-  if(!exType){
+  if(!NATIVE_MAP[key]){
     var nameMap={gauge:'仪表盘',sankey:'桑基图',heatmap:'热力图',boxplot:'箱线图'};
     setStatus('chartStatus','err','「'+(nameMap[key]||key)+'」在 Excel 中没有原生可编辑图表，请改用「插入图片」。');
     return;
   }
   if(!selAddress){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
+  var COMBO=['bar','line','scatter'];
+  var useCombo = COMBO.indexOf(key)>=0 && lastOption && lastOption.series && lastOption.series.length;
+  var baseType = useCombo ? pickBaseType(lastOption) : resolveNativeType();
+  // 系列方向
+  var sb = Excel.ChartSeriesBy.auto;
+  if(useCombo){
+    var d=decideSeriesBy(lastOption);
+    if(d==='Rows') sb=Excel.ChartSeriesBy.rows;
+    else if(d==='Columns') sb=Excel.ChartSeriesBy.columns;
+  }
   setStatus('chartStatus','info','<span class="spin"></span>正在插入原生可编辑图表…');
   try{
     await Excel.run(async function(ctx){
       var sheet = ctx.workbook.worksheets.getActiveWorksheet();
       var local = selAddress.indexOf('!')>=0 ? selAddress.split('!').pop() : selAddress;
       var range = sheet.getRange(local);
-      var ch = sheet.charts.add(exType, range, Excel.ChartSeriesBy.auto);
+      var ch = sheet.charts.add(baseType, range, sb);
       ch.title.text = lastTitle || '图表';
       ch.name = 'LZ_Chart_'+Date.now();
-      await ctx.sync();
-      // 尽量套用品牌配色（失败不影响插入）
-      try{
-        ch.series.load('count');
+
+      if(useCombo){
+        var es = lastOption.series;
+        ch.series.load('items/name');
         await ctx.sync();
-        for(var i=0;i<ch.series.items.length;i++){
-          ch.series.items[i].format.fill.setSolidColor(PALETTE[i%PALETTE.length]);
-        }
+        var secCount=0;
+        ch.series.items.forEach(function(exS, idx){
+          var s = matchSeries(es, exS.name, idx);
+          if(!s) return;
+          // 逐系列类型（柱系列保持基础类型，仅折线/散点需要改写）
+          if(s.type==='line' || s.type==='scatter'){
+            try{ exS.chartType = seriesExcelType(s, lastOption); }catch(_){}
+          } else {
+            try{ exS.format.fill.setSolidColor(PALETTE[idx%PALETTE.length]); }catch(_){}
+          }
+          // 副坐标轴
+          if(s.yAxisIndex===1 || s.xAxisIndex===1){
+            try{ exS.axisGroup = Excel.ChartAxisGroup.secondary; secCount++; }catch(_){}
+          }
+        });
         await ctx.sync();
-      }catch(_){}
+        setStatus('chartStatus','ok','已插入原生组合图'+(secCount?'（含副坐标轴）':'')+'，可在 Excel 中继续编辑。');
+      } else {
+        await ctx.sync();
+        try{
+          ch.series.load('count');
+          await ctx.sync();
+          for(var i=0;i<ch.series.items.length;i++){
+            ch.series.items[i].format.fill.setSolidColor(PALETTE[i%PALETTE.length]);
+          }
+          await ctx.sync();
+        }catch(_){}
+        setStatus('chartStatus','ok','已插入原生图表，可在 Excel 中直接编辑数据/颜色/样式。');
+      }
     });
-    setStatus('chartStatus','ok','已插入原生图表，可在 Excel 中直接编辑数据/颜色/样式。');
   }catch(e){
     setStatus('chartStatus','err','插入原生图表失败：'+e.message+'。可改用「插入图片」。');
   }
