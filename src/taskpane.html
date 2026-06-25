@@ -178,6 +178,7 @@ var lastSeriesType = null;   // 当前图表的类型（用于原生图表映射
 var lastTitle = '图表';      // 当前图表标题
 var lastOption = null;       // 当前 ECharts 配置（用于判断堆积/横向等）
 var selAddress = '';         // 上次读取的选区地址
+var selMultiArea = false;    // 是否为不连续/多区域选区
 
 // 我方图表类型 → Excel 原生 ChartType（无映射者 Excel 无原生可编辑图表）
 var NATIVE_MAP = {
@@ -292,13 +293,45 @@ async function readSelection(){
   if(!officeReady){ setStatus('dataStatus','err','未检测到 Excel 环境（请在 Excel 中通过插件打开本窗格）。'); return; }
   try{
     await Excel.run(async function(ctx){
-      var r = ctx.workbook.getSelectedRange();
-      r.load(['values','address','rowCount','columnCount']);
-      await ctx.sync();
-      currentData = r.values;
-      selAddress = r.address;
+      var list=[], single=null;
+      // 优先用多区域接口，支持不连续选区
+      try{
+        var areas = ctx.workbook.getSelectedRanges();
+        areas.areas.load('items/values,address,rowIndex,columnIndex,rowCount,columnCount');
+        await ctx.sync();
+        areas.areas.items.forEach(function(a){
+          list.push({top:a.rowIndex,left:a.columnIndex,rows:a.rowCount,cols:a.columnCount,values:a.values,address:a.address});
+        });
+      }catch(e){ list=[]; }
+      if(list.length===0){
+        var r = ctx.workbook.getSelectedRange();
+        r.load(['values','address','rowCount','columnCount','rowIndex','columnIndex']);
+        await ctx.sync();
+        list.push({top:r.rowIndex,left:r.columnIndex,rows:r.rowCount,cols:r.columnCount,values:r.values,address:r.address});
+      }
+
+      // 拼接成紧凑表：剔除完全未选中的列/行
+      var rowSet={}, colSet={};
+      list.forEach(function(a){
+        for(var i=0;i<a.rows;i++) rowSet[a.top+i]=1;
+        for(var j=0;j<a.cols;j++) colSet[a.left+j]=1;
+      });
+      var rows=Object.keys(rowSet).map(Number).sort(function(x,y){return x-y;});
+      var cols=Object.keys(colSet).map(Number).sort(function(x,y){return x-y;});
+      var matrix=rows.map(function(R){
+        return cols.map(function(C){
+          for(var k=0;k<list.length;k++){ var a=list[k];
+            if(R>=a.top&&R<a.top+a.rows&&C>=a.left&&C<a.left+a.cols){ return a.values[R-a.top][C-a.left]; } }
+          return '';
+        });
+      });
+
+      currentData = matrix;
+      selMultiArea = (list.length>1) || (cols.length && (cols[cols.length-1]-cols[0]+1!==cols.length)) || (rows.length && (rows[rows.length-1]-rows[0]+1!==rows.length));
+      selAddress = (list.length===1) ? list[0].address : '';
       renderPreview(currentData);
-      setStatus('dataStatus','ok','已读取 '+r.address+'（'+r.rowCount+'×'+r.columnCount+'）。');
+      var areaTxt = list.length>1 ? ('，'+list.length+' 个区域') : '';
+      setStatus('dataStatus','ok','已识别 '+rows.length+'×'+cols.length+' 数据'+areaTxt+(selMultiArea?'（不连续选区已重组）':'')+'。');
     });
   }catch(e){
     setStatus('dataStatus','err','读取失败：'+e.message);
@@ -742,7 +775,28 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
   // 逐系列处理（组合图 & 单类型图都走这里，保证颜色/标签/标记一致）
   ch.series.load('items/name');
   await ctx.sync();
-  var es=opt.series||[]; var items=ch.series.items||[]; var secUsed=false;
+  var es=opt.series||[];
+
+  // —— 系列筛选：删除预览中不存在的多余系列（应对选区多选了无关行/系列）——
+  try{
+    var canPrune = es.length>0 && es.every(function(s){ return s.name!=null && String(s.name)!==''; });
+    if(canPrune){
+      var wanted={}, rawset={};
+      es.forEach(function(s){ wanted[normName(s.name)]=1; rawset[String(s.name)]=1; });
+      var keepFn=function(nm){ return rawset[String(nm)]===1 || wanted[normName(nm)]===1; };
+      var present=ch.series.items.filter(function(x){ return keepFn(x.name); });
+      if(present.length>0 && present.length < ch.series.items.length){
+        ch.series.items.forEach(function(x){ if(!keepFn(x.name)){ try{ x.delete(); }catch(_){} } });
+        await ctx.sync();
+        ch.series.load('items/name');
+        await ctx.sync();
+      } else if(present.length===0){
+        warn.push('系列筛选(名称未对齐)');
+      }
+    }
+  }catch(e){ warn.push('系列筛选'); }
+
+  var items=ch.series.items||[]; var secUsed=false;
   for(var k=0;k<items.length;k++){
     var exS=items[k]; var s=matchSeries(es, exS.name, k); if(!s) continue;
     // 类型（仅在组合图时改写折线/散点；柱系列沿用基础类型）
@@ -789,6 +843,22 @@ async function applyEChartsToChart(ctx, ch, opt, useCombo, warn){
   return secUsed;
 }
 
+// 不连续选区：把重组后的紧凑数据写入隐藏表，供原生图表绑定
+async function buildSourceRange(ctx){
+  var name='_AYchart_src';
+  var hs = ctx.workbook.worksheets.getItemOrNullObject(name);
+  await ctx.sync();
+  if(hs.isNullObject){ hs = ctx.workbook.worksheets.add(name); }
+  var used = hs.getUsedRangeOrNullObject(); await ctx.sync();
+  try{ if(!used.isNullObject){ used.clear(); await ctx.sync(); } }catch(_){}
+  var rows=currentData.length, cols=(currentData[0]||[]).length;
+  var rng = hs.getRangeByIndexes(0,0,rows,cols);
+  rng.values = currentData;
+  await ctx.sync();
+  try{ hs.visibility = Excel.SheetVisibility.hidden; await ctx.sync(); }catch(_){}
+  return rng;
+}
+
 async function insertNativeChart(){
   if(!officeReady){ setStatus('chartStatus','err','未检测到 Excel 环境。'); return; }
   var key = lastSeriesType;
@@ -798,12 +868,12 @@ async function insertNativeChart(){
     setStatus('chartStatus','err','「'+(nameMap[key]||key)+'」在 Excel 中没有原生可编辑图表，请改用「插入图片」。');
     return;
   }
-  if(!selAddress){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
+  if(!currentData || !currentData.length){ setStatus('chartStatus','err','请先「读取当前选区」。'); return; }
   var COMBO=['bar','line','scatter'];
   var useCombo = COMBO.indexOf(key)>=0 && lastOption && lastOption.series && lastOption.series.length;
   var baseType = useCombo ? pickBaseType(lastOption) : resolveNativeType();
   var sb = Excel.ChartSeriesBy.auto;
-  if(useCombo){
+  if(useCombo && !selMultiArea){
     var d=decideSeriesBy(lastOption);
     if(d==='Rows') sb=Excel.ChartSeriesBy.rows; else if(d==='Columns') sb=Excel.ChartSeriesBy.columns;
   }
@@ -812,13 +882,28 @@ async function insertNativeChart(){
     var warn=[]; var hadSec=false;
     await Excel.run(async function(ctx){
       var sheet = ctx.workbook.worksheets.getActiveWorksheet();
-      var local = selAddress.indexOf('!')>=0 ? selAddress.split('!').pop() : selAddress;
-      var range = sheet.getRange(local);
+      var range;
+      if(selMultiArea){
+        range = await buildSourceRange(ctx);     // 不连续选区→隐藏表紧凑数据
+      }else{
+        var local = selAddress.indexOf('!')>=0 ? selAddress.split('!').pop() : selAddress;
+        range = sheet.getRange(local);
+      }
       var ch = sheet.charts.add(baseType, range, sb);
       ch.name = 'LZ_Chart_'+Date.now();
       await ctx.sync();                                   // 先提交创建，确保系列集合就绪
       hadSec = await applyEChartsToChart(ctx, ch, lastOption, useCombo, warn);
     });
+    // 横轴类别（列）筛选检测：原生图无法只画部分类别
+    try{
+      if(useCombo && lastOption){
+        var xc=(firstAxis(lastOption.xAxis)||{}).data;
+        var hasHeader=document.getElementById('hasHeader').checked;
+        var avail = d==='Rows' ? (currentData[0]||[]).slice(1).length
+                  : d==='Columns' ? currentData.slice(hasHeader?1:0).length : null;
+        if(xc && avail!=null && xc.length<avail){ warn.push('横轴类别筛选(请只选需要的列)'); }
+      }
+    }catch(_){}
     var msg='已插入原生'+(useCombo?'组合图':'图表')+(hadSec?'（含副坐标轴）':'')+'，可在 Excel 中继续编辑。';
     if(warn.length){ msg+=' 部分细节未能套用：'+Array.from(new Set(warn)).join('、')+'。'; }
     setStatus('chartStatus','ok',msg);
